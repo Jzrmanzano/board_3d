@@ -28,6 +28,8 @@ export interface Solution {
   ledAmps(id: string): number;
   /** 0 to 1: how bright the LED looks. */
   ledGlow(id: string): number;
+  /** 0 to 1: the share of the time the LED is being driven while it conducts. A dimmed LED has a low duty, even though it looks nearly full bright. */
+  ledDuty(id: string): number;
   /** Volts across a buzzer. */
   buzzVolts(id: string): number;
   /** Output pins that are currently driving the net a part is on. */
@@ -217,7 +219,7 @@ export function analyze(board: BoardId, items: Item[]): Analysis {
   function solveAll(driveIn: Record<number, Drive> | ((p: number) => Drive), inputs: Record<string, number> = {}, burnt: Iterable<string> = []): Solution {
     const drive = (p: number): Drive => (typeof driveIn === 'function' ? driveIn(p) : driveIn[p]) ?? { mode: 'in', level: 0 };
     const dead = new Set(burnt), closed = (e: El) => (inputs[e.id] ?? 0) > 0.5;
-    const blank: Solution = { shorted: true, volt: () => 0, ledAmps: () => 0, ledGlow: () => 0, buzzVolts: () => 0, pinsDriving: () => [], pinAmps: () => 0, pinVolt: () => 0, wireAmps: () => 0 };
+    const blank: Solution = { shorted: true, volt: () => 0, ledAmps: () => 0, ledGlow: () => 0, ledDuty: () => 0, buzzVolts: () => 0, pinsDriving: () => [], pinAmps: () => 0, pinVolt: () => 0, wireAmps: () => 0 };
     if (shorted) return blank;
 
     const idx = new Map<string, number>();
@@ -273,6 +275,8 @@ export function analyze(board: BoardId, items: Item[]): Analysis {
       return i < 1e-6 ? 0 : i;
     };
     const part = (id: string) => parts.find(q => q.e.id === id);
+    /** An LED fed from a pin is on for as long as that pin is high; one fed straight from a supply is always on. */
+    const dutyOf = (q: { a: string }) => Math.max(0, ...pinRoots.filter(([p, pr]) => drive(p).mode === 'out' && g.find(pr) === g.find(q.a)).map(([p]) => drive(p).level)) || 1;
     const driving = (id: string) => {
       const q = part(id);
       return q ? pinRoots.filter(([p, pr]) => drive(p).mode !== 'in' && drive(p).level > 0 && (g.find(pr) === g.find(q.a) || g.find(pr) === g.find(q.b))).map(([p]) => p) : [];
@@ -328,9 +332,9 @@ export function analyze(board: BoardId, items: Item[]): Analysis {
       ledGlow: id => {
         const q = part(id); if (!q) return 0;
         const i = amps(q.e, q.a, q.b); if (i <= 0) return 0;
-        const duty = Math.max(0, ...pinRoots.filter(([p, pr]) => drive(p).mode === 'out' && g.find(pr) === g.find(q.a)).map(([p]) => drive(p).level));
-        return Math.sqrt(Math.min(1, (duty || 1) * i / 0.005));
+        return Math.sqrt(Math.min(1, dutyOf(q) * i / 0.005));
       },
+      ledDuty: id => { const q = part(id); return q && amps(q.e, q.a, q.b) > 0 ? dutyOf(q) : 0; },
       buzzVolts: id => { const q = part(id); return q ? Math.abs(volt(q.a) - volt(q.b)) : 0; },
       pinsDriving: driving,
       pinVolt: p => { const r = pinRoots.find(([n2]) => n2 === p)?.[1]; return r ? volt(r) : 0; },

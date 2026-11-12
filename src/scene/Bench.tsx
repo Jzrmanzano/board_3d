@@ -6,7 +6,7 @@ import { BOARDS, ITEM_INFO } from '../data/boards';
 import { setTone } from '../sim/audio';
 import { beginMove, currentReadout, finishMove, isWireEnd, moveTo, pressPoint, releasePoint, selectHot, setPoint, setProbe } from '../state/actions';
 import { allTerminals, movedWire } from '../state/bench';
-import { benchOf, burntOf, lessonOf, useLab } from '../state/store';
+import { benchOf, burntOf, keyOf, missionOf, useLab } from '../state/store';
 import { itemId } from '../types';
 import { buildWorld } from './world';
 
@@ -24,9 +24,10 @@ function pickOf(o: T.Object3D | null): string | null {
 export function Bench({ labelLayer }: { labelLayer: RefObject<HTMLDivElement | null> }) {
   const gl = useThree(s => s.gl), size = useThree(s => s.size);
   const camera = useThree(s => s.camera) as T.OrthographicCamera;
-  const board = useLab(s => s.board), hot = useLab(s => s.hot), showParts = useLab(s => !!lessonOf(s).showParts);
+  const board = useLab(s => s.board), hot = useLab(s => s.hot), showParts = useLab(s => !!missionOf(s).showParts);
   const probed = useLab(s => s.probe?.name ?? null), nav = useLab(s => s.nav), bench = useLab(benchOf), burnt = useLab(burntOf), point = useLab(s => s.point), pending = useLab(s => s.pending), sparks = useLab(s => s.sparks);
-  const drag = useLab(s => s.drag);
+  const drag = useLab(s => s.drag), panels = useLab(s => s.panels);
+  const insets = useRef({ l: 0, r: 0 });   // how much of the left and right of the screen a panel covers
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
   // while a wire end is being dragged, the wire is drawn plugged into the point under the pointer
   const shown = useMemo(() => {
@@ -44,7 +45,7 @@ export function Bench({ labelLayer }: { labelLayer: RefObject<HTMLDivElement | n
   useEffect(() => () => world.dispose(), [world]);
 
   /* the student's parts and wires */
-  useLayoutEffect(() => { world.setCircuit(shown, useLab.getState().burnt[`${board}-${lessonOf(useLab.getState()).id}`] ?? []); }, [world, shown, board]);
+  useLayoutEffect(() => { world.setCircuit(shown, useLab.getState().burnt[keyOf(useLab.getState())] ?? []); }, [world, shown, board]);
   useEffect(() => { burnt.forEach(id => world.burn(id)); }, [world, burnt]);
   const firstSpark = useRef(sparks);
   useEffect(() => {
@@ -123,12 +124,17 @@ export function Bench({ labelLayer }: { labelLayer: RefObject<HTMLDivElement | n
     return () => { el.removeEventListener('pointerdown', down, true); el.removeEventListener('pointermove', move); el.removeEventListener('pointerleave', leave); window.removeEventListener('pointerup', up); if (controls.current) controls.current.enabled = true; };
   }, [world, bench, board, gl, camera]);
 
+  const measure = () => {   // side panels only; on a phone they are sheets along the bottom
+    const wide = matchMedia('(min-width: 761px)').matches, width = (sel: string) => (wide ? document.querySelector<HTMLElement>(sel)?.offsetWidth ?? 0 : 0);
+    insets.current = { l: width('.drawer.left'), r: width('.drawer.right') };
+  };
   const frustum = () => {
-    const a = size.width / size.height, h = viewH.current;
-    camera.left = -h * a / 2; camera.right = h * a / 2; camera.top = h / 2; camera.bottom = -h / 2;
+    const a = size.width / size.height, h = viewH.current, shift = ((insets.current.l - insets.current.r) / 2) * (h / size.height);   // slide the window so the scene sits in the free part
+    camera.left = -h * a / 2 - shift; camera.right = h * a / 2 - shift; camera.top = h / 2; camera.bottom = -h / 2;
     camera.updateProjectionMatrix();
   };
   const fit = () => {   // frame the bench's bounding box as seen from the default camera direction
+    measure();
     const box = new T.Box3();
     world.group.children.forEach(o => { if (!o.userData.nofit && o.visible) box.expandByObject(o); });
     const c = box.getCenter(new T.Vector3()), target = controls.current!.target;
@@ -140,13 +146,14 @@ export function Bench({ labelLayer }: { labelLayer: RefObject<HTMLDivElement | n
       const x = d.dot(right), y = d.dot(up);
       x0 = Math.min(x0, x); x1 = Math.max(x1, x); y0 = Math.min(y0, y); y1 = Math.max(y1, y);
     }
-    viewH.current = Math.max((y1 - y0) * 1.08, (x1 - x0) * 1.04 / (size.width / size.height));
+    viewH.current = Math.max((y1 - y0) * 1.08, (x1 - x0) * 1.14 / (Math.max(240, size.width - insets.current.l - insets.current.r) / size.height));
     target.copy(c).addScaledVector(right, (x0 + x1) / 2).addScaledVector(up, (y0 + y1) / 2);
     camera.position.copy(target).addScaledVector(VIEW_DIR, 900);
     camera.zoom = 1; frustum(); controls.current!.update();
   };
   useLayoutEffect(fit, [world]);        // a new board reframes the view; placing parts does not
   useLayoutEffect(frustum, [size]);     // a resize keeps the same framing
+  useLayoutEffect(() => { measure(); frustum(); }, [panels]);   // opening a panel slides the view, it does not zoom
   useEffect(() => {
     view.fit = fit;
     view.top = () => {   // look straight down: a flat 2D plan of the bench
@@ -192,7 +199,6 @@ export function Bench({ labelLayer }: { labelLayer: RefObject<HTMLDivElement | n
     <>
       <hemisphereLight args={[0xffffff, 0x9aa6b2, 0.46 * Math.PI]} />
       <directionalLight args={[0xffffff, 0.56 * Math.PI]} position={[-70, 150, 110]} />
-      <gridHelper args={[1600, 160, 0x8b9bab, 0x8b9bab]} material-transparent material-opacity={0.22} />
       <OrbitControls ref={controls} enableDamping zoomToCursor screenSpacePanning
         mouseButtons={{ LEFT: nav === 'pan' ? T.MOUSE.PAN : T.MOUSE.ROTATE, MIDDLE: T.MOUSE.DOLLY, RIGHT: nav === 'pan' ? T.MOUSE.ROTATE : T.MOUSE.PAN }}
         touches={{ ONE: nav === 'pan' ? T.TOUCH.PAN : T.TOUCH.ROTATE, TWO: T.TOUCH.DOLLY_PAN }} maxPolarAngle={Math.PI * 0.47} minZoom={0.5} maxZoom={6} />

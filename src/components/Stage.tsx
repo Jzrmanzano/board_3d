@@ -1,12 +1,14 @@
 import { Canvas } from '@react-three/fiber';
 import { Component, useEffect, useMemo, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { ITEM_INFO } from '../data/boards';
+import { lockedBy, PARTS, unlockedParts, type PartId } from '../data/missions';
 import { Bench, view } from '../scene/Bench';
 import { analyze } from '../sim/circuit';
-import { cancelTool, currentReadout, dismissNotice, flipItem, moveWireTyped, pickTool, placeTyped, redo, removeItem, resetBench, selectHot, setInput, setNav, toggleLabels, toggleSound, undo } from '../state/actions';
+import { cancelTool, currentReadout, dismissNotice, escapePanel, flipItem, moveWireTyped, pickTool, placeTyped, redo, removeItem, requestRun, resetBench, resumeRun, selectHot, setHelp, setInput, setNav, stepOnce, stopRun, toggleLabels, togglePanel, toggleSound, undo } from '../state/actions';
 import { TWO_POINT, type Tool, type ToolKind } from '../state/bench';
-import { benchOf, boardOf, useLab } from '../state/store';
+import { benchOf, boardOf, keyOf, missionOf, useLab } from '../state/store';
 import { itemId, type Item } from '../types';
+import { Icon } from './Icons';
 
 /** Shows a message in place of the 3D view on devices where WebGL cannot start. */
 class Fallback extends Component<{ children: ReactNode }, { failed: boolean }> {
@@ -14,26 +16,12 @@ class Fallback extends Component<{ children: ReactNode }, { failed: boolean }> {
   static getDerivedStateFromError() { return { failed: true }; }
   render() {
     return this.state.failed
-      ? <p className="fail">The 3D view could not start on this device. The lessons, code editor and serial monitor still work.</p>
+      ? <p className="fail">The 3D view could not start on this device. The missions, code editor and serial monitor still work.</p>
       : this.props.children;
   }
 }
 
 /* --- the parts tray --- */
-interface TrayPart { label: string; tool: Tool; swatch?: string; only?: 'uno' | 'esp32' }
-const TRAY: TrayPart[] = [
-  { label: 'Red LED', tool: { kind: 'led', color: 0xff3b30 }, swatch: '#ff3b30' },
-  { label: 'Green LED', tool: { kind: 'led', color: 0x2ecc40 }, swatch: '#2ecc40' },
-  { label: '220 Ω', tool: { kind: 'res', ohms: 220 } },
-  { label: '1 kΩ', tool: { kind: 'res', ohms: 1000 } },
-  { label: '10 kΩ', tool: { kind: 'res', ohms: 10000 } },
-  { label: 'Wire', tool: { kind: 'wire' } },
-  { label: 'Button', tool: { kind: 'button' } },
-  { label: 'Knob', tool: { kind: 'pot' } },
-  { label: 'Buzzer', tool: { kind: 'buzzer' } },
-  { label: 'Distance sensor', tool: { kind: 'sonar' } },
-  { label: 'Touch pad', tool: { kind: 'pad' }, only: 'esp32' },
-];
 const same = (a: Tool | null, b: Tool) => !!a && a.kind === b.kind && a.color === b.color && a.ohms === b.ohms;
 
 const STEPS: Record<ToolKind, [string, string?]> = {
@@ -49,22 +37,27 @@ const STEPS: Record<ToolKind, [string, string?]> = {
 
 function Tray() {
   const board = useLab(s => s.board), tool = useLab(s => s.tool);
-  const canUndo = useLab(s => !!s.undo[`${s.board}-${boardOf(s).lessons[s.lesson].id}`]?.length), canRedo = useLab(s => !!s.redo[`${s.board}-${boardOf(s).lessons[s.lesson].id}`]?.length);
+  const canUndo = useLab(s => !!s.undo[keyOf(s)]?.length), canRedo = useLab(s => !!s.redo[keyOf(s)]?.length);
+  const passed = useLab(s => s.passed), have = useMemo(() => unlockedParts(Object.keys(passed)), [passed]);
   const hasParts = useLab(s => benchOf(s).length > 0);
   return (
     <section className="tray" aria-label="Parts tray">
-      <div className="tray-row" role="toolbar" aria-label="Parts">
-        <b className="tray-title">Parts</b>
-        {TRAY.filter(p => !p.only || p.only === board).map(p => (
-          <button key={p.label} type="button" className="part" aria-pressed={same(tool, p.tool)} onClick={() => pickTool(p.tool)}>
-            {p.swatch && <i className="sw" style={{ background: p.swatch }} />}{p.label}
+      <b className="tray-title">Parts</b>
+      {(Object.keys(PARTS) as PartId[]).filter(id => !PARTS[id].only || PARTS[id].only === board).map(id => {
+        const p = PARTS[id], locked = !have.has(id), by = lockedBy(id);
+        return (
+          <button
+            key={id} type="button" className={locked ? 'part locked' : 'part'} aria-pressed={locked ? undefined : same(tool, p.tool)} aria-disabled={locked || undefined}
+            title={locked && by ? `Locked. Pass “${by.mission.title}” to unlock it.` : undefined} onClick={() => pickTool(p.tool)}
+          >
+            {p.swatch && <i className="sw" style={{ background: p.swatch }} />}{p.label}{locked && <><Icon name="lock" /><span className="sr-only"> (locked)</span></>}
           </button>
-        ))}
-        <span className="tray-gap" />
-        <button type="button" onClick={undo} disabled={!canUndo}>Undo</button>
-        <button type="button" onClick={redo} disabled={!canRedo}>Redo</button>
-        <button type="button" onClick={resetBench} disabled={!hasParts}>Reset bench</button>
-      </div>
+        );
+      })}
+      <span className="tray-gap" />
+      <button type="button" onClick={undo} disabled={!canUndo} aria-label="Undo" title="Undo (Ctrl+Z)"><Icon name="undo" /><span className="lbl">Undo</span></button>
+      <button type="button" onClick={redo} disabled={!canRedo} aria-label="Redo" title="Redo (Ctrl+Y)"><Icon name="redo" /><span className="lbl">Redo</span></button>
+      <button type="button" onClick={resetBench} disabled={!hasParts} aria-label="Reset bench" title="Clear the bench. Undo brings it back."><Icon name="trash" /><span className="lbl">Reset bench</span></button>
     </section>
   );
 }
@@ -202,7 +195,7 @@ function Probe() {
 /* --- on-screen inputs --- */
 type Control = Extract<Item, { ctl: string }>;
 
-function Hold({ it, id }: { it: Control; id: string }) {
+function Hold({ id, label }: { id: string; label: string }) {
   const down = useLab(s => !!s.inputs[id]);
   const press = (on: boolean) => () => setInput(id, on ? 1 : 0);
   const key = (on: boolean) => (e: KeyboardEvent) => { if (e.key === ' ' || e.key === 'Enter') setInput(id, on ? 1 : 0); };
@@ -210,17 +203,17 @@ function Hold({ it, id }: { it: Control; id: string }) {
     <button type="button" className={down ? 'hold down' : 'hold'}
       onPointerDown={press(true)} onPointerUp={press(false)} onPointerLeave={press(false)} onPointerCancel={press(false)}
       onKeyDown={key(true)} onKeyUp={key(false)} onBlur={press(false)}>
-      {it.ctl}
+      {label}
     </button>
   );
 }
 
-function Slider({ it, id }: { it: Control; id: string }) {
+function Slider({ it, id, label }: { it: Control; id: string; label: string }) {
   const value = useLab(s => s.inputs[id] ?? 0), sonar = it.t === 'sonar';
   const shown = sonar ? value : Math.round(value * 100);   // the wall is stored in cm, the knob as 0 to 1
   return (
     <label>
-      {it.ctl}
+      {label}
       <input type="range" min={sonar ? 2 : 0} max={100} value={shown} onChange={e => setInput(id, sonar ? +e.target.value : +e.target.value / 100)} />
       <output>{sonar ? `${shown} cm` : `${shown}%`}</output>
     </label>
@@ -228,66 +221,113 @@ function Slider({ it, id }: { it: Control; id: string }) {
 }
 
 function Controls() {
-  const bench = useLab(benchOf);
+  const bench = useLab(benchOf), names = useLab(missionOf).controls;
   const items = bench.map((it, k) => [it, itemId(it, k)] as const).filter((x): x is readonly [Control, string] => 'ctl' in x[0]);
   if (!items.length) return null;
   return (
     <div className="controls">
-      {items.map(([it, id]) => (it.t === 'button' || it.t === 'pad' ? <Hold key={id} it={it} id={id} /> : <Slider key={id} it={it} id={id} />))}
+      {items.map(([it, id]) => (it.t === 'button' || it.t === 'pad' ? <Hold key={id} id={id} label={names?.[it.t] ?? it.ctl} /> : <Slider key={id} it={it} id={id} label={names?.[it.t] ?? it.ctl} />))}
     </div>
   );
 }
 
-/** Keyboard shortcuts for the bench: Escape puts the part down, Delete removes the selected one, Ctrl+Z and Ctrl+Y undo and redo. */
-function useBenchKeys() {
+/** Everything the keyboard can do without a mouse. The help dialog lists these. */
+function useHotkeys() {
   useEffect(() => {
     const onKey = (e: globalThis.KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); if (useLab.getState().running) stopRun(); else requestRun(); return; }   // works inside the editor too
       const t = e.target as HTMLElement;
-      if (t.closest('input, textarea, select') || e.altKey) return;
-      const s = useLab.getState();
-      if (e.key === 'Escape') { if (s.tool) cancelTool(); else selectHot(null); }
-      else if ((e.key === 'Delete' || e.key === 'Backspace') && s.hot && benchOf(s).some((it, k) => itemId(it, k) === s.hot)) { e.preventDefault(); removeItem(s.hot); }
-      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
-      else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+      if (t.closest('input, textarea, select') || e.altKey || document.querySelector('[aria-modal="true"]')) return;   // typing, or a dialog has the keyboard
+      const s = useLab.getState(), k = e.key;
+      if (e.ctrlKey || e.metaKey) {
+        if (k.toLowerCase() === 'z') { e.preventDefault(); if (e.shiftKey) redo(); else undo(); }
+        else if (k.toLowerCase() === 'y') { e.preventDefault(); redo(); }
+        return;
+      }
+      if (k === 'Escape') { if (s.tool) cancelTool(); else if (s.hot) selectHot(null); else escapePanel(); }
+      else if ((k === 'Delete' || k === 'Backspace') && s.hot && benchOf(s).some((it, i) => itemId(it, i) === s.hot)) { e.preventDefault(); removeItem(s.hot); }
+      else if (k === '?') setHelp(true);
+      else if (k === '+' || k === '=') view.zoom(1.25);
+      else if (k === '-' || k === '_') view.zoom(0.8);
+      else if (!e.shiftKey) {
+        const letter = k.toLowerCase();
+        if (letter === 'm') togglePanel('map');
+        else if (letter === 'b') togglePanel('brief');
+        else if (letter === 'c') togglePanel('code');
+        else if (letter === 't') view.top();
+        else if (k === '0') view.fit();
+      }
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 }
 
-export function Stage() {
-  const labels = useLab(s => s.labels), nav = useLab(s => s.nav), sound = useLab(s => s.sound);
-  const down = useRef([0, 0]), labelLayer = useRef<HTMLDivElement>(null);
-  useBenchKeys();
+/** Run, step and stop stay on the bench, so the sketch can be run without opening the code. */
+function RunBar() {
+  const running = useLab(s => s.running), paused = useLab(s => s.paused), line = useLab(s => s.line), looking = useLab(s => s.cursor != null);
+  const status = looking ? 'Looking back' : paused && line ? `Held · line ${line}` : running ? 'Running' : 'Stopped';
   return (
-    <main className="stage" onPointerDown={e => { down.current = [e.clientX, e.clientY]; }}>
-      <Tray />
-      <div className="view">
-        <Fallback>
-          {/* legacy linear flat: plain colours in, plain colours out. The toon look needs no colour management or tone mapping. */}
-          <Canvas
-            orthographic legacy linear flat
-            dpr={[1, 2]}
-            gl={{ antialias: true, alpha: true }}
-            camera={{ manual: true, near: 1, far: 4000 }}
-            style={{ position: 'absolute', inset: 0 }}
-            onPointerMissed={e => { if (Math.hypot(e.clientX - down.current[0], e.clientY - down.current[1]) < 5 && !useLab.getState().tool) selectHot(null); }}
-          >
-            <Bench labelLayer={labelLayer} />
-          </Canvas>
-        </Fallback>
-        <div className="hotlayer" ref={labelLayer} hidden={!labels} />
-        <Probe />
-        <div className="tools">
-          <button type="button" aria-label="Zoom out" onClick={() => view.zoom(0.8)}>−</button>
-          <button type="button" aria-label="Zoom in" onClick={() => view.zoom(1.25)}>+</button>
-          <button type="button" aria-pressed={nav === 'pan'} title="Dragging slides the view sideways and up or down. Right-drag turns it." onClick={() => setNav('pan')}>Move</button>
-          <button type="button" aria-pressed={nav === 'rotate'} title="Dragging turns the view. Right-drag slides it." onClick={() => setNav('rotate')}>Rotate</button>
-          <button type="button" title="Look straight down at the bench" onClick={() => view.top()}>Top view</button>
-          <button type="button" onClick={() => view.fit()}>Reset view</button>
-          <button type="button" aria-pressed={labels} onClick={toggleLabels}>Labels</button>
-          <button type="button" aria-pressed={sound} onClick={toggleSound}>{sound ? 'Sound on' : 'Sound off'}</button>
-        </div>
+    <div className="runbar" role="group" aria-label="Run the sketch">
+      <button type="button" className={running ? 'run on' : 'run'} onClick={running ? stopRun : () => requestRun()} aria-keyshortcuts="Control+Enter" title={running ? 'Stop the sketch (Ctrl+Enter)' : 'Run the sketch (Ctrl+Enter)'}>
+        <Icon name={running ? 'stop' : 'play'} /><span className="lbl">{running ? 'Stop' : 'Run'}</span>
+      </button>
+      <button type="button" onClick={stepOnce} aria-label="Step one line" title="Run one line, then wait. While running freely this pauses at the next line."><Icon name="step" /><span className="lbl">Step</span></button>
+      {paused && <button type="button" onClick={resumeRun} aria-label="Continue at full speed" title="Run at full speed again"><Icon name="forward" /><span className="lbl">Continue</span></button>}
+      <span className={running ? 'state on' : 'state'} role="status">{status}</span>
+    </div>
+  );
+}
+
+/** Moving around the bench: zoom, how a drag moves the view, the flat top view, and what to show. */
+function Tools() {
+  const labels = useLab(s => s.labels), nav = useLab(s => s.nav), sound = useLab(s => s.sound);
+  return (
+    <div className="tools" role="toolbar" aria-label="View">
+      <div className="group">
+        <button type="button" aria-label="Zoom in" title="Zoom in (+)" onClick={() => view.zoom(1.25)}><Icon name="zoomIn" /></button>
+        <button type="button" aria-label="Zoom out" title="Zoom out (−)" onClick={() => view.zoom(0.8)}><Icon name="zoomOut" /></button>
+        <button type="button" aria-label="Look straight down" title="Top view (T)" onClick={() => view.top()}><Icon name="top" /></button>
+        <button type="button" aria-label="Reset the view" title="Reset the view (0)" onClick={() => view.fit()}><Icon name="fit" /></button>
+      </div>
+      <div className="group">
+        <button type="button" aria-label="Drag to move the view" aria-pressed={nav === 'pan'} title="Dragging slides the view. Right-drag turns it. Arrow keys slide it." onClick={() => setNav('pan')}><Icon name="move" /></button>
+        <button type="button" aria-label="Drag to turn the view" aria-pressed={nav === 'rotate'} title="Dragging turns the view. Right-drag slides it." onClick={() => setNav('rotate')}><Icon name="rotate" /></button>
+      </div>
+      <div className="group">
+        <button type="button" aria-label="Part labels" aria-pressed={labels} title="Show or hide the part labels" onClick={toggleLabels}><Icon name="tag" /></button>
+        <button type="button" aria-label="Sound" aria-pressed={sound} title={sound ? 'Sound is on' : 'Sound is off'} onClick={toggleSound}><Icon name={sound ? 'volume' : 'mute'} /></button>
+        <button type="button" aria-label="Keyboard help" title="Keyboard help (?)" onClick={() => setHelp(true)}><Icon name="help" /></button>
+      </div>
+    </div>
+  );
+}
+
+/** The 3D bench with everything that sits on it. The panels (map, brief, code) open over it from the side. */
+export function Stage() {
+  const labels = useLab(s => s.labels);
+  const down = useRef([0, 0]), labelLayer = useRef<HTMLDivElement>(null);
+  useHotkeys();
+  return (
+    <div className="stage" onPointerDown={e => { down.current = [e.clientX, e.clientY]; }}>
+      <Fallback>
+        {/* legacy linear flat: plain colours in, plain colours out. The toon look needs no colour management or tone mapping. */}
+        <Canvas
+          orthographic legacy linear flat
+          dpr={[1, 2]}
+          gl={{ antialias: true, alpha: true }}
+          camera={{ manual: true, near: 1, far: 4000 }}
+          style={{ position: 'absolute', inset: 0 }}
+          onPointerMissed={e => { if (Math.hypot(e.clientX - down.current[0], e.clientY - down.current[1]) < 5 && !useLab.getState().tool) selectHot(null); }}
+        >
+          <Bench labelLayer={labelLayer} />
+        </Canvas>
+      </Fallback>
+      <div className="hotlayer" ref={labelLayer} hidden={!labels} />
+      <Probe />
+      <RunBar />
+      <Tools />
+      <div className="base">
         <div className="dock">
           <div className="stack">
             <Notice />
@@ -297,7 +337,8 @@ export function Stage() {
           <Controls />
           <Help />
         </div>
+        <Tray />
       </div>
-    </main>
+    </div>
   );
 }

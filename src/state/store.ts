@@ -1,9 +1,17 @@
 import { create } from 'zustand';
 import { BOARDS } from '../data/boards';
+import { MISSIONS, missionKey } from '../data/missions';
+import type { CheckResult } from '../sim/check';
 import type { BoardId, Item } from '../types';
+import { NONE as NO_PANELS, type Panel, type Panels } from './panels';
 import type { Tool } from './bench';
 
-export type Tab = 'guide' | 'wiring' | 'pinout';
+export type Tab = 'mission' | 'notes' | 'board';
+
+/** A mission that has been passed. */
+export interface PassRecord { at: number; hints: number; predicted: 'right' | 'wrong' | 'skipped' }
+/** What the student said would happen, and what did. */
+export interface PredictionRecord { picked: string; actual: string; right: boolean }
 
 /** What the bench held at one moment, for undo. */
 export interface Snap { items: Item[]; burnt: string[] }
@@ -13,8 +21,8 @@ export interface LabState {
   /** True while the landing page shows instead of the lab (empty address bar hash). */
   home: boolean;
   board: BoardId;
-  /** Index into the board's lessons. */
-  lesson: number;
+  /** Index into the board's missions. */
+  mission: number;
   tab: Tab;
   /** The highlighted part, if any. */
   hot: string | null;
@@ -34,6 +42,11 @@ export interface LabState {
   drag: { id: string; end: 'a' | 'b'; to: string | null } | null;
   /** A message about the last thing that happened on the bench. */
   notice: Notice | null;
+  /** Which panels are open over the bench, and the panel the student just asked for, which should take the keyboard focus. */
+  panels: Panels;
+  focusPanel: { name: Panel; n: number } | null;
+  /** The keyboard help is open. */
+  help: boolean;
   /** Step mode: the sketch is held before the line shown, waiting for Step. */
   paused: boolean;
   line: number | null;
@@ -47,8 +60,16 @@ export interface LabState {
   sparks: number;
   /** On-screen inputs by part id: 1 or 0 for a held button or pad, 0 to 1 for a knob, centimetres for the wall. */
   inputs: Record<string, number>;
-  /** Lesson keys whose sketch has run. */
-  done: string[];
+  /** Missions passed, by key (board and mission id). */
+  passed: Record<string, PassRecord>;
+  /** How many of the three hints the student has opened, by mission key. */
+  hintsUsed: Record<string, number>;
+  predictions: Record<string, PredictionRecord>;
+  /** The latest run of the mission's checks, cleared when the bench or sketch changes. */
+  results: CheckResult[] | null;
+  checking: boolean;
+  /** The prediction question is open, and whether the run that follows is a step run. */
+  asking: { step: boolean } | null;
   sound: boolean;
   /** What a left-button drag on the bench does: slide the view sideways and up or down, or turn it. */
   nav: 'pan' | 'rotate';
@@ -58,12 +79,16 @@ export interface LabState {
   serial: string;
 }
 
-const DONE_KEY = 'boardlab-done', BENCH_KEY = 'boardlab-benches';
-function loadDone(): string[] {
-  try { return JSON.parse(localStorage.getItem(DONE_KEY) || '[]'); } catch { return []; }   // progress just starts empty
+const MISSION_KEY = 'boardlab-missions', BENCH_KEY = 'boardlab-benches';
+const record = (v: unknown) => (v && typeof v === 'object' ? v : {}) as Record<string, never>;
+function loadProgress(): Pick<LabState, 'passed' | 'hintsUsed' | 'predictions'> {
+  try {
+    const v = JSON.parse(localStorage.getItem(MISSION_KEY) || '{}');
+    return { passed: record(v.passed), hintsUsed: record(v.hintsUsed), predictions: record(v.predictions) };
+  } catch { return { passed: {}, hintsUsed: {}, predictions: {} }; }   // progress just starts empty
 }
-export function saveDone(done: string[]) {
-  try { localStorage.setItem(DONE_KEY, JSON.stringify(done)); } catch { /* not saved, still counted for this visit */ }
+export function saveProgress(s: Pick<LabState, 'passed' | 'hintsUsed' | 'predictions'>) {
+  try { localStorage.setItem(MISSION_KEY, JSON.stringify({ passed: s.passed, hintsUsed: s.hintsUsed, predictions: s.predictions })); } catch { /* not saved, still counted for this visit */ }
 }
 function loadBenches(): { benches: Record<string, Item[]>; burnt: Record<string, string[]> } {
   try {
@@ -77,17 +102,17 @@ export function saveBenches(benches: Record<string, Item[]>, burnt: Record<strin
 
 const saved = loadBenches();
 export const useLab = create<LabState>(() => ({
-  home: true, board: 'uno', lesson: 0, tab: 'guide', hot: null, edits: {}, ...saved, undo: {}, redo: {},
+  home: true, board: 'uno', mission: 0, tab: 'mission', panels: NO_PANELS, focusPanel: null, help: false, hot: null, edits: {}, ...saved, undo: {}, redo: {},
   tool: null, pending: null, point: null, notice: null, drag: null, sparks: 0, paused: false, line: null, cursor: null, frameTick: 0, probe: null,
-  inputs: {}, done: loadDone(),
+  inputs: {}, ...loadProgress(), results: null, checking: false, asking: null,
   sound: false, nav: 'pan', labels: true, running: false, errLine: null, serial: '',
 }));
 
 const NONE: Item[] = [], NONE_IDS: string[] = [];
 export const boardOf = (s: LabState) => BOARDS[s.board];
-export const lessonOf = (s: LabState) => BOARDS[s.board].lessons[s.lesson];
-export const keyOf = (s: LabState) => `${s.board}-${lessonOf(s).id}`;
-export const codeOf = (s: LabState) => s.edits[keyOf(s)] ?? lessonOf(s).code;
+export const missionOf = (s: LabState) => MISSIONS[s.board][s.mission];
+export const keyOf = (s: LabState) => missionKey(s.board, missionOf(s).id);
+export const codeOf = (s: LabState) => s.edits[keyOf(s)] ?? missionOf(s).starter;
 /** The parts and wires the student has placed for the open lesson. */
 export const benchOf = (s: LabState) => s.benches[keyOf(s)] ?? NONE;
 export const burntOf = (s: LabState) => s.burnt[keyOf(s)] ?? NONE_IDS;

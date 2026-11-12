@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { BOARDS } from '../src/data/boards';
+import { OLD_LESSONS, oldLesson } from './fixtures-lessons';
 import { analyze, type Drive } from '../src/sim/circuit';
 import { makeHW } from '../src/sim/hardware';
 import { run } from '../src/sim/interpreter';
@@ -9,7 +10,7 @@ import type { BoardId, Item } from '../src/types';
 
 const HIGH: Drive = { mode: 'out', level: 1 }, LOW: Drive = { mode: 'out', level: 0 };
 const kinds = (board: BoardId, items: Item[]) => analyze(board, items).issues.map(i => i.kind).sort();
-const lesson = (board: BoardId, id: string) => BOARDS[board].lessons.find(l => l.id === id)!.circuit;
+const lesson = (board: BoardId, id: string) => oldLesson(board, id).circuit;
 
 /** A correct Uno blink circuit that each test below damages in one way. */
 const GOOD: Item[] = [
@@ -135,7 +136,7 @@ test('an unpowered distance sensor is reported', () => {
 
 test('the sensor lessons themselves have no problems', () => {
   for (const id of ['blink', 'button', 'knob', 'sound', 'distance']) assert.deepEqual(analyze('uno', lesson('uno', id)).issues, [], 'uno ' + id);
-  for (const l of BOARDS.esp32.lessons) assert.deepEqual(analyze('esp32', l.circuit).issues, [], 'esp32 ' + l.id);
+  for (const l of OLD_LESSONS.esp32) assert.deepEqual(analyze('esp32', l.circuit).issues, [], 'esp32 ' + l.id);
 });
 
 /* --- what happens while a sketch runs on the student's circuit --- */

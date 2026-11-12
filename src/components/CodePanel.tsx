@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { clearSerial, editCode, getFrames, resetCode, resumeRun, startRun, stepOnce, stopRun } from '../state/actions';
+import { clearSerial, editCode, getFrames, resetCode } from '../state/actions';
 import { codeOf, useLab } from '../state/store';
+import { Icon } from './Icons';
 import { Timeline } from './Timeline';
 
 function CopyButton({ text }: { text: string }) {
@@ -9,7 +10,7 @@ function CopyButton({ text }: { text: string }) {
     const done = (ok: boolean) => { setLabel(ok ? 'Copied' : 'Copy failed'); setTimeout(() => setLabel('Copy'), 1500); };
     navigator.clipboard.writeText(text).then(() => done(true), () => done(false));
   };
-  return <button type="button" onClick={copy}>{label}</button>;
+  return <button type="button" onClick={copy}><Icon name="copy" />{label}</button>;
 }
 
 /** The sketch editor with its line-number gutter, and the serial monitor under it. */
@@ -39,13 +40,9 @@ export function CodePanel() {
   return (
     <section className="ide">
       <div className="ide-head">
-        <h2>Code</h2>
-        <span className={running ? 'status on' : 'status'}>{status}</span>
-        <button type="button" onClick={resetCode}>Reset</button>
+        <span>{status}</span>
+        <button type="button" onClick={resetCode} title="Put the starter sketch back"><Icon name="fit" />Reset code</button>
         <CopyButton text={code} />
-        <button type="button" title="Run one line of the sketch, then wait. While it is running freely this pauses it." onClick={stepOnce}>Step</button>
-        {paused && <button type="button" title="Run at full speed again" onClick={resumeRun}>Continue</button>}
-        <button type="button" className={running ? 'run on' : 'run'} onClick={running ? stopRun : () => startRun()}>{running ? 'Stop' : 'Run'}</button>
       </div>
       <div className="editor">
         <pre ref={gutter} aria-hidden="true">

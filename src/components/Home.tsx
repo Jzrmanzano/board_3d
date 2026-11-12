@@ -1,4 +1,6 @@
 import { BOARDS } from '../data/boards';
+import { MISSIONS } from '../data/missions';
+import { Icon } from './Icons';
 
 const ALL_BOARDS = Object.values(BOARDS);
 const TAGLINES: Record<string, string> = {
@@ -6,9 +8,9 @@ const TAGLINES: Record<string, string> = {
   esp32: 'A faster board with a 12-bit analog input, touch sensing and Wi-Fi hardware.',
 };
 const STEPS = [
-  ['Wire', 'Follow the 3D breadboard. Click any part or pin to see what it does and where it connects.'],
-  ['Code', 'Edit the starter sketch in the built-in editor. It is the same Arduino-style C++ you will use on real hardware.'],
-  ['Run', 'Press Run. LEDs glow, buzzers sound and Serial prints, with knobs and buttons you can use on screen.'],
+  ['Pick a place', 'Open the campus map and choose a mission: a small device to build for somewhere at school, like a night light or a door chime.'],
+  ['Build and predict', 'Place the parts and wires on the 3D bench yourself, write the sketch, and say what you expect before you run it.'],
+  ['Prove it', 'Run the checks on your own build. Every one has to pass, and passing unlocks new parts and the next places on the map.'],
 ] as const;
 
 /** A flat top-down drawing of a board, used as the hero picture. */
@@ -33,14 +35,14 @@ function BoardArt() {
 }
 
 export function Home() {
-  const total = ALL_BOARDS.reduce((n, b) => n + b.lessons.length, 0);
+  const total = ALL_BOARDS.reduce((n, b) => n + MISSIONS[b.id].filter(m => !m.sandbox).length, 0);
   return (
     <div className="home">
       <header className="home-bar">
-        <a className="brand" href="#" aria-label="Board Lab 3D home"><h1>Board Lab <span>3D</span></h1></a>
+        <a className="brand" href="#" aria-label="Board Lab 3D home"><Icon name="chip" className="mark" /><h1>Board Lab <span>3D</span></h1></a>
         <nav aria-label="Sections">
           <a href="#boards-section" onClick={e => { e.preventDefault(); document.getElementById('boards-section')?.scrollIntoView({ behavior: 'smooth' }); }}>Boards</a>
-          <a className="cta small" href="#uno-meet">Open the lab</a>
+          <a className="cta small" href="#uno-tour">Open the lab</a>
         </nav>
       </header>
 
@@ -48,11 +50,11 @@ export function Home() {
         <section className="hero">
           <div className="hero-text">
             <p className="eyebrow">Free · No install · No hardware needed</p>
-            <h2>Learn Arduino and ESP32 on a 3D workbench.</h2>
-            <p className="lede">Wire a circuit, write the code, press Run and watch the board respond. {total} hands-on lessons, all in your browser.</p>
+            <h2>Fix real problems around a school campus with Arduino and ESP32.</h2>
+            <p className="lede">Build the device yourself, guess what it will do, then prove it with checks that run your own sketch. {total} missions around a school campus, all in your browser.</p>
             <div className="hero-actions">
-              <a className="cta" href="#uno-meet">Start with the Arduino Uno →</a>
-              <a className="ghost" href="#esp32-meet">Try the ESP32</a>
+              <a className="cta" href="#uno-tour">Start with the Arduino Uno →</a>
+              <a className="ghost" href="#esp32-tour">Try the ESP32</a>
             </div>
           </div>
           <BoardArt />
@@ -75,11 +77,11 @@ export function Home() {
                 <h3>{b.name}</h3>
                 <p>{TAGLINES[b.id]}</p>
                 <ol>
-                  {b.lessons.map((l, i) => (
-                    <li key={l.id}><a href={`#${b.id}-${l.id}`}><span className="n">{String(i + 1).padStart(2, '0')}</span><span><b>{l.title}</b><small>{l.hook}</small></span></a></li>
+                  {MISSIONS[b.id].filter(m => !m.sandbox).map((m, i) => (
+                    <li key={m.id}><a href={`#${b.id}-${m.id}`}><span className="n">{String(i + 1).padStart(2, '0')}</span><span><b>{m.place}: {m.title}</b><small>{m.hook}</small></span></a></li>
                   ))}
                 </ol>
-                <a className="cta" href={`#${b.id}-${b.lessons[0].id}`}>Start {b.name} →</a>
+                <a className="cta" href={`#${b.id}-${MISSIONS[b.id][0].id}`}>Start {b.name} →</a>
               </article>
             ))}
           </div>
