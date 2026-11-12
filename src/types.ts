@@ -3,16 +3,16 @@ export type WireColor = 'red' | 'black' | 'orange' | 'yellow' | 'green' | 'blue'
 
 /** One thing on the bench. Connection points are named like "U:13" (Uno pin), "E:D5" (ESP32 pin), "a10" (breadboard hole) or "T-15" (power rail). */
 export type Item =
-  | { t: 'wire'; a: string; b: string; c: WireColor }
-  | { t: 'led'; id: string; a: string; k: string; color: number; pin: number }
-  | { t: 'res'; a: string; b: string }
-  | { t: 'button'; id: string; col: number; pin: number; ctl: string }
-  | { t: 'pot'; id: string; row: string; col: number; pin: number; ctl: string }
-  | { t: 'buzzer'; id: string; a: string; b: string; pin: number }
-  | { t: 'sonar'; id: string; row: string; col: number; trig: number; echo: number; ctl: string }
-  | { t: 'pad'; id: string; pin: number; ctl: string };
+  | { t: 'wire'; id?: string; a: string; b: string; c: WireColor }
+  | { t: 'led'; id: string; a: string; k: string; color: number; pin?: number }
+  | { t: 'res'; id?: string; a: string; b: string; ohms?: number }
+  | { t: 'button'; id: string; col: number; pin?: number; ctl: string }
+  | { t: 'pot'; id: string; row: string; col: number; pin?: number; ctl: string }
+  | { t: 'buzzer'; id: string; a: string; b: string; pin?: number }
+  | { t: 'sonar'; id: string; row: string; col: number; trig?: number; echo?: number; ctl: string }
+  | { t: 'pad'; id: string; pin?: number; ctl: string };
 
-export const itemId = (it: Item, index: number): string => ('id' in it ? it.id : it.t + index);
+export const itemId = (it: Item, index: number): string => (('id' in it && it.id) || it.t + index);
 
 export type Info = [title: string, text: string];
 export type Pin = [name: string, note: string, kind?: 'pwr' | 'gnd' | 'bus'];

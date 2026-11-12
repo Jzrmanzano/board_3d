@@ -16,7 +16,12 @@ export interface Hardware {
   touchRead(pin: number): number;
   print(text: string): void;
 }
-export interface RunControl { stop: boolean; onLoop?: () => void }
+export interface RunControl {
+  stop: boolean;
+  onLoop?: () => void;
+  /** Called with the line of each statement just before it runs. Return a promise to hold the sketch there. */
+  step?: (line: number) => Promise<void> | void;
+}
 
 export class SimError extends Error {
   line: number;
@@ -446,8 +451,14 @@ export async function run(src: string, hw: Hardware, ctl: RunControl): Promise<v
       env.m.set(d.name, rec);
     }
   }
+  /** The line a statement starts on, or 0 for the ones that are only braces or keywords. */
+  const lineOf = (n: Stmt): number => (n.k === 'decl' ? n.vars[0]?.line ?? 0 : 'line' in n ? n.line : 0);
   async function exec(n: Stmt, env: Env): Promise<Flow> {
     await tick();
+    if (ctl.step) {
+      const line = lineOf(n), held = line ? ctl.step(line) : undefined;
+      if (held) { await held; if (ctl.stop) throw STOP; }
+    }
     switch (n.k) {
       case 'block': { const e = new Env(env); for (const s of n.body) { const r = await exec(s, e); if (r) return r; } return; }
       case 'decl': return declare(n, env);

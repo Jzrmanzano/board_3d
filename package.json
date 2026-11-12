@@ -8,7 +8,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "tsx --test tests/sim.test.ts"
+    "test": "tsx --test tests/sim.test.ts tests/circuit.test.ts tests/bench.test.ts tests/inside.test.ts"
   },
   "dependencies": {
     "@react-three/drei": "^10.7.9",
