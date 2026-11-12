@@ -17,19 +17,6 @@ export const itemId = (it: Item, index: number): string => (('id' in it && it.id
 export type Info = [title: string, text: string];
 export type Pin = [name: string, note: string, kind?: 'pwr' | 'gnd' | 'bus'];
 
-export interface Lesson {
-  id: string;
-  title: string;
-  hook: string;
-  showParts?: boolean;
-  circuit: Item[];
-  /** intro, how and tryit are trusted HTML written in src/data. */
-  intro: string;
-  how: string[];
-  tryit: string[];
-  code: string;
-}
-
 export interface Board {
   id: BoardId;
   name: string;
@@ -39,5 +26,4 @@ export interface Board {
   parts: Record<string, Info>;
   pinout: { title: string; pins: Pin[] }[];
   facts: [string, string][];
-  lessons: Lesson[];
 }

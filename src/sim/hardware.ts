@@ -10,6 +10,8 @@ export interface HWHooks {
   onAlert?(text: string): void;
   /** A pin, a note or the clock moved: a moment worth recording. */
   onChange?(): void;
+  /** Run on the sketch's own clock only, which moves when delays are skipped and a little with every reading of it. This makes runs repeatable. */
+  virtualClock?: boolean;
 }
 
 /** What the 3D view needs to draw one moment: how bright each LED is, which note sounds, and the current in every wire. */
@@ -58,6 +60,10 @@ export interface VirtualHW extends Hardware {
   line: number;
   /** When true, delay() returns at once but still moves the sketch's clock forward. Step mode uses it. */
   skipDelays: boolean;
+  /** The sketch's clock in milliseconds, read without moving it. */
+  elapsed(): number;
+  /** Lets time pass on the sketch's clock. */
+  advance(ms: number): void;
   analysis: Analysis;
 }
 
@@ -67,7 +73,7 @@ export function makeHW(board: Board, circuit: Item[], inputs: () => Record<strin
   const analysis = analyze(board.id, circuit), burnt = new Set(hooks.burnt ?? []), warned = new Set<number>();
   const logic = board.id === 'uno' ? 5 : 3.3;
   let wake: (() => void) | null = null, timer: ReturnType<typeof setTimeout> | undefined;
-  let version = 0, key = '', sol!: Solution, skew = 0;
+  let key = '', sol!: Solution, skew = 0, ticks = 0;
 
   const raw = (p: number): Drive => {
     if (mode[p] === 1) return { mode: 'out', level: level[p] || 0 };
@@ -76,7 +82,7 @@ export function makeHW(board: Board, circuit: Item[], inputs: () => Record<strin
   const drive = (p: number): Drive => (tones[p] ? { mode: 'out', level: 1 } : raw(p));
   /** The circuit solved for the pins and inputs as they are now, solved again only when something changed. */
   function circuitNow(): Solution {
-    const k = version + JSON.stringify(inputs()) + JSON.stringify(tones);
+    const k = JSON.stringify([mode, level, tones, inputs()]);   // solved again only when something that matters has changed
     if (key && k === key) return sol;
     for (let again = 0; again < 4; again++) {   // a burnt LED changes the circuit, so look again after each
       sol = analysis.solve(drive, inputs(), burnt);
@@ -92,10 +98,10 @@ export function makeHW(board: Board, circuit: Item[], inputs: () => Record<strin
       warned.add(p);
       hooks.onAlert?.(`Pin ${p} is supplying ${Math.round(Math.abs(sol.pinAmps(p)) * 1000)} mA. A pin can only handle about 40 mA, so on a real board it could be damaged. Check what this pin is wired to.`);
     }
-    key = version + JSON.stringify(inputs()) + JSON.stringify(tones);
+    key = k;
     return sol;
   }
-  const changed = () => { version++; circuitNow(); hooks.onChange?.(); };
+  const changed = () => { circuitNow(); hooks.onChange?.(); };
   const find = <T extends Item['t']>(t: T, test: (it: Extract<Item, { t: T }>) => boolean) =>
     circuit.find((it): it is Extract<Item, { t: T }> => it.t === t && test(it as Extract<Item, { t: T }>));
   const ledIds = circuit.filter(it => it.t === 'led').map(it => (it as Extract<Item, { t: 'led' }>).id);
@@ -105,7 +111,9 @@ export function makeHW(board: Board, circuit: Item[], inputs: () => Record<strin
     sleep: ms => { if (hw.skipDelays) { skew += ms; hooks.onChange?.(); return Promise.resolve(); } return new Promise<void>(r => { wake = r; timer = setTimeout(r, ms); }); },
     pause: () => new Promise<void>(r => setTimeout(r, 0)),
     wakeUp() { clearTimeout(timer); wake?.(); },
-    now: () => performance.now() - t0 + skew,
+    now: () => (hooks.virtualClock ? skew + (ticks += 0.05) : performance.now() - t0 + skew),
+    elapsed: () => (hooks.virtualClock ? skew + ticks : performance.now() - t0 + skew),
+    advance(ms) { skew += ms; },
     pinMode(p, m) { mode[p] = m; if (m !== 1) level[p] = m === 2 ? 1 : 0; changed(); },
     digitalWrite(p, v) { level[p] = v ? 1 : 0; changed(); },
     analogWrite(p, v) { mode[p] = 1; level[p] = Math.min(255, Math.max(0, v)) / 255; changed(); },

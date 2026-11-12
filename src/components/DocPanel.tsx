@@ -1,46 +1,16 @@
-import { WIRE_CSS, wiringRows } from '../data/wiring';
-import { setTab, showAnswer } from '../state/actions';
-import { benchOf, boardOf, lessonOf, useLab, type Tab } from '../state/store';
-import type { Board, Lesson } from '../types';
+import { setTab } from '../state/actions';
+import { boardOf, missionOf, useLab, type Tab } from '../state/store';
+import type { Board } from '../types';
+import { html, MissionPanel } from './MissionPanel';
 
-const TABS: [Tab, string][] = [['guide', 'Guide'], ['wiring', 'Wiring'], ['pinout', 'Board']];
+const TABS: [Tab, string][] = [['mission', 'Mission'], ['notes', 'Code notes'], ['board', 'Board']];
 
-/** Lesson text is trusted HTML from src/data, so inline <code> tags can be used in it. */
-const html = (s: string) => ({ dangerouslySetInnerHTML: { __html: s } });
-
-function Guide({ lesson }: { lesson: Lesson }) {
+function Notes() {
+  const m = useLab(missionOf);
   return (
     <>
-      <h2>{lesson.title}</h2>
-      <p {...html(lesson.intro)} />
-      <h3>How the code works</h3>
-      <ul>{lesson.how.map((x, i) => <li key={i} {...html(x)} />)}</ul>
-      <h3>Try it yourself</h3>
-      <ul className="try">{lesson.tryit.map((x, i) => <li key={i} {...html(x)} />)}</ul>
-    </>
-  );
-}
-
-function Wiring({ lesson }: { lesson: Lesson }) {
-  const placed = useLab(s => benchOf(s).length);
-  if (!lesson.circuit.length) return <><h2>Wiring</h2><p>This lesson uses only the board itself. Nothing to wire yet.</p></>;
-  return (
-    <>
-      <h2>Wiring</h2>
-      <p>Build this circuit yourself: pick parts from the tray above the 3D view and click the holes below. Columns are numbered 1 to 30 and rows are lettered a to j.</p>
-      <p><button type="button" className="answer" onClick={showAnswer}>Stuck? Build it for me</button> <small>{placed} of {lesson.circuit.length} placed on your bench</small></p>
-      <div className="scrollx">
-        <table className="wiring">
-          <tbody>
-            {wiringRows(lesson.circuit).map((r, i) => (
-              <tr key={i}>
-                <th>{r.wire && <i className="sw" style={{ background: WIRE_CSS[r.wire] }} />}{r.part}</th>
-                <td>{r.where}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
+      <h2>How the code works</h2>
+      <ul>{m.how.map((x, i) => <li key={i} {...html(x)} />)}</ul>
     </>
   );
 }
@@ -63,15 +33,15 @@ function Reference({ board }: { board: Board }) {
 }
 
 export function DocPanel() {
-  const tab = useLab(s => s.tab), board = useLab(boardOf), lesson = useLab(lessonOf);
+  const tab = useLab(s => s.tab), board = useLab(boardOf), mission = useLab(missionOf);
   return (
     <section className="doc">
       <div className="tabs" role="tablist">
         {TABS.map(([id, label]) => <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}>{label}</button>)}
       </div>
-      {/* the key makes each tab and lesson open scrolled to the top */}
-      <div className="tabbody" key={`${board.id}-${lesson.id}-${tab}`}>
-        {tab === 'guide' ? <Guide lesson={lesson} /> : tab === 'wiring' ? <Wiring lesson={lesson} /> : <Reference board={board} />}
+      {/* the key makes each tab and mission open scrolled to the top */}
+      <div className="tabbody" key={`${board.id}-${mission.id}-${tab}`}>
+        {tab === 'mission' ? <MissionPanel /> : tab === 'notes' ? <Notes /> : <Reference board={board} />}
       </div>
     </section>
   );

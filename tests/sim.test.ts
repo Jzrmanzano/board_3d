@@ -2,13 +2,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { BOARDS } from '../src/data/boards';
+import { OLD_LESSONS, oldLesson } from './fixtures-lessons';
 import { makeHW } from '../src/sim/hardware';
 import { run, SimError } from '../src/sim/interpreter';
 import type { BoardId } from '../src/types';
 
 /** Runs a sketch for a few passes of loop() with delays skipped, and returns the board state and serial text. */
 async function play(boardId: BoardId, lessonId: string, inputs: Record<string, number> = {}, opts: { code?: string; loops?: number; each?: (pass: number) => void } = {}) {
-  const board = BOARDS[boardId], lesson = board.lessons.find(l => l.id === lessonId)!;
+  const board = BOARDS[boardId], lesson = oldLesson(boardId, lessonId);
   let serial = '', pass = 0;
   const hw = makeHW(board, lesson.circuit, () => inputs, s => { serial += s; });
   hw.sleep = () => new Promise<void>(r => setTimeout(r, 0));
@@ -18,7 +19,7 @@ async function play(boardId: BoardId, lessonId: string, inputs: Record<string, n
 }
 
 for (const board of Object.values(BOARDS)) {
-  for (const lesson of board.lessons) {
+  for (const lesson of OLD_LESSONS[board.id]) {
     test(`${board.id}/${lesson.id} starter sketch runs`, async () => {
       const inputs: Record<string, number> = {};
       for (const it of lesson.circuit) if ('ctl' in it) inputs[it.id] = it.t === 'pot' ? 0.5 : it.t === 'sonar' ? 30 : 0;
@@ -29,7 +30,7 @@ for (const board of Object.values(BOARDS)) {
 
 test('blink ends each pass with the LED off', async () => {
   const seen: number[] = [];
-  const code = BOARDS.uno.lessons[1].code.replace('delay(1000);\n}', 'delay(1000);\n  Serial.println(digitalRead(LED_PIN));\n}');
+  const code = oldLesson('uno', 'blink').code.replace('delay(1000);\n}', 'delay(1000);\n  Serial.println(digitalRead(LED_PIN));\n}');
   const { serial } = await play('uno', 'blink', {}, { code });
   serial.trim().split('\n').forEach(v => seen.push(+v));
   assert.deepEqual(seen, [0, 0, 0]);
@@ -56,7 +57,7 @@ test('knob sets brightness on both boards', async () => {
 });
 
 test('moving a wire without changing the code leaves the LED dark', async () => {
-  const code = BOARDS.uno.lessons[1].code.replace('LED_PIN = 13', 'LED_PIN = 12').replace('digitalWrite(LED_PIN, LOW);', '');
+  const code = oldLesson('uno', 'blink').code.replace('LED_PIN = 13', 'LED_PIN = 12').replace('digitalWrite(LED_PIN, LOW);', '');
   assert.equal((await play('uno', 'blink', {}, { code })).hw.glow(13), 0);
 });
 
