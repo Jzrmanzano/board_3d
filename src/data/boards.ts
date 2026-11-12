@@ -15,6 +15,7 @@ export const ITEM_INFO: Record<string, Info> = {
   pot: ['Potentiometer', 'A knob that outputs any voltage between ground and the supply voltage.'],
   buzzer: ['Piezo buzzer', 'Turns a signal that switches on and off very fast into a sound.'],
   sonar: ['HC-SR04 distance sensor', 'Sends out an ultrasonic ping and times how long the echo takes to come back.'],
+  wire: ['Jumper wire', 'Carries current between two points with no resistance. Drag either end to a new hole or pin, or type new places below.'],
   pad: ['Touch pad', 'A bare piece of metal on a wire. A finger near it changes its electrical capacitance.']
 };
 
