@@ -8,7 +8,6 @@ export interface WorldSpec {
   board: BoardId;
   /** Board parts to label, or null to leave the board unlabelled. */
   parts: Record<string, Info> | null;
-  circuit: Item[];
   info: Record<string, Info>;
 }
 export interface Hot { id: string; title: string; pos: T.Vector3 }
@@ -19,6 +18,15 @@ export interface World {
   set(id: string, value: number): void;
   highlight(id: string | null): void;
   animate(timeMs: number): void;
+  /** Replaces every placed part and wire. LEDs in `burnt` show as burnt out. */
+  setCircuit(items: Item[], burnt: string[]): void;
+  /** An LED burns out: it turns black and lets out a puff of smoke. */
+  burn(id: string): void;
+  puff(at: T.Vector3, kind: 'smoke' | 'spark'): void;
+  /** Where a connection point is, or null when the name is not one. */
+  anchor(name: string): T.Vector3 | null;
+  /** Rings the point under the pointer and the first point of a part being placed, with a line between them. */
+  markers(hover: string | null, pending: string | null): void;
   dispose(): void;
 }
 
@@ -36,7 +44,7 @@ interface BuiltBoard {
   group: T.Group; parts: Record<string, T.Group>; hot: Record<string, Vec>; anchors: Record<string, Vec>;
   W: number; D: number; setLed(v: number): void; usbAt: Vec; plug: Vec;
 }
-interface Made { g: T.Group; set?: (v: number) => void; top?: T.Vector3 }
+interface Made { g: T.Group; set?: (v: number) => void; top?: T.Vector3; burn?: () => void }
 
 const INK = 0x1b2430, HILITE = 0xe2572b, METAL = 0xc9ced3, GOLD = 0xd9b24a, DARK = 0x23272e;
 const WIRE: Record<string, number> = { red: 0xd6453d, black: 0x2f353d, orange: 0xf08a24, yellow: 0xe8c22e, green: 0x3aa655, blue: 0x3577d4, white: 0xe9ecef, purple: 0x8d5bd1 };
@@ -51,7 +59,7 @@ grad.minFilter = grad.magFilter = T.NearestFilter; grad.generateMipmaps = false;
 export function buildWorld(spec: WorldSpec, anisotropy: number): World {
   const world = new T.Group();
   const devs: Record<string, (v: number) => void> = {}, groups: Record<string, T.Group> = {};
-  const hots: Hot[] = [], anim: ((t: number) => void)[] = [];
+  const hots: Hot[] = [], itemAnim: ((t: number) => void)[] = [];
   let uno: BuiltBoard | null = null, bb: T.Group | null = null, padPos: T.Vector3 | null = null, lit: T.MeshBasicMaterial[] = [];
 
   /* --- primitives: toon-shaded solids with an ink outline (a slightly larger back-face shell) --- */
@@ -231,6 +239,13 @@ export function buildWorld(spec: WorldSpec, anisotropy: number): World {
   /* --- components --- */
   type Of<K extends Item['t']> = Extract<Item, { t: K }>;
   const leg = (g: T.Group, p: T.Vector3, h: number, c = 0xaab2ba) => box(g, p.x, p.y, p.z, 0.55, h, 0.55, c, { nh: 1 });
+  /** A thin horizontal lead from p to q at height y. */
+  function lead(g: T.Group, p: T.Vector3, q: T.Vector3, y: number) {
+    const dx = q.x - p.x, dz = q.z - p.z, len = Math.hypot(dx, dz);
+    if (len < 0.1) return;
+    const m = new T.Mesh(new T.CylinderGeometry(0.3, 0.3, len, 8), toon(0xaab2ba));
+    m.position.set((p.x + q.x) / 2, y, (p.z + q.z) / 2); m.rotation.set(0, -Math.atan2(dz, dx), Math.PI / 2, 'YXZ'); g.add(m);
+  }
   function mkWire(it: Of<'wire'>, k: number): Made {
     const g = new T.Group(), up = 5.4, a = anchor(it.a), b = anchor(it.b);
     const p0 = a.clone(), p3 = b.clone();
@@ -240,25 +255,48 @@ export function buildWorld(spec: WorldSpec, anisotropy: number): World {
     const curve = new T.CubicBezierCurve3(p0, p0.clone().setY(p0.y + h), p3.clone().setY(p3.y + h), p3);
     g.add(new T.Mesh(new T.TubeGeometry(curve, 32, 0.85, 8), toon(WIRE[it.c])));
     g.add(new T.Mesh(new T.TubeGeometry(curve, 32, 0.85 + HT, 8), shell(g)));
-    return { g };
+    /* beads that carry the current: conventional current, so they run from + towards -, faster when there is more of it */
+    const count = Math.max(3, Math.min(14, Math.round(curve.getLength() / 9))), beads: T.Group[] = [], at = new T.Vector3();
+    const coreGeo = new T.SphereGeometry(1.5, 10, 8), rimGeo = new T.SphereGeometry(1.5 + HT, 10, 8), coreMat = new T.MeshBasicMaterial({ color: 0xffd21f });
+    for (let i = 0; i < count; i++) {
+      const bead = new T.Group();
+      bead.add(new T.Mesh(coreGeo, coreMat), new T.Mesh(rimGeo, shell(g)));
+      bead.children.forEach(c => { c.raycast = () => {}; });
+      bead.visible = false; g.add(bead); beads.push(bead);
+    }
+    let amps = 0;
+    itemAnim.push(t => {
+      const a = Math.abs(amps);
+      if (a < 0.0002) { for (const b of beads) b.visible = false; return; }
+      const speed = 0.00022 * (0.35 + Math.min(1, a / 0.02)) * Math.sign(amps);   // fractions of the wire per millisecond
+      beads.forEach((b, i) => {
+        curve.getPoint((((t * speed + i / count) % 1) + 1) % 1, at);
+        b.position.copy(at); b.visible = true;
+      });
+    });
+    return { g, set: v => { amps = v; } };
   }
   function mkLed(it: Of<'led'>): Made {
     const g = new T.Group(), a = anchor(it.a), k = anchor(it.k), mx = (a.x + k.x) / 2, mz = (a.z + k.z) / 2, y = a.y;
     const dim = new T.Color(it.color).multiplyScalar(0.5).getHex();
-    leg(g, a, 7); leg(g, k, 7);
+    leg(g, a, 7); leg(g, k, 7); lead(g, a.clone().setY(y + 7), k.clone().setY(y + 7), y + 7);
     const ms = [cyl(g, mx, y + 6.5, mz, 3, 1, dim), cyl(g, mx, y + 7.5, mz, 2.5, 4.6, dim), ball(g, mx, y + 12.1, mz, 2.5, dim)];
     const halo = new T.Mesh(new T.SphereGeometry(8, 20, 14), new T.MeshBasicMaterial({ color: it.color, transparent: true, opacity: 0, depthWrite: false }));
     halo.position.set(mx, y + 11, mz); halo.raycast = () => {}; g.add(halo);
-    const set = (v: number) => { ms.forEach(m => { m.material.emissive.setHex(it.color); m.material.emissiveIntensity = v * 0.9; }); halo.material.opacity = v * 0.3; };
-    return { g, set, top: new T.Vector3(mx, y + 15, mz) };
+    let burnt = false;
+    const set = (v: number) => { if (burnt) v = 0; ms.forEach(m => { m.material.emissive.setHex(it.color); m.material.emissiveIntensity = v * 0.9; }); halo.material.opacity = v * 0.3; };
+    const burn = () => { burnt = true; set(0); ms.forEach(m => m.material.color.setHex(0x2a2522)); };
+    return { g, set, burn, top: new T.Vector3(mx, y + 15, mz) };
   }
+  const BAND = [0x1b1e23, 0x7a4a21, 0xc0392b, 0xe8821e, 0xe8c22e, 0x3aa655, 0x3577d4, 0x8d5bd1, 0x888f96, 0xeeeeee];
   function mkRes(it: Of<'res'>): Made {
-    const g = new T.Group(), a = anchor(it.a), b = anchor(it.b), mx = (a.x + b.x) / 2, y = a.y + 3.2;
-    leg(g, a, 3.4); leg(g, b, 3.4);
-    cyl(g, mx, y, a.z, 0.3, Math.abs(b.x - a.x), 0xaab2ba, { ax: 'x', nh: 1, seg: 8 });
-    cyl(g, mx, y, a.z, 1.25, 6.4, 0xdcbd8e, { ax: 'x' });
-    [[-2.1, 0xc0392b], [-1, 0xc0392b], [0.1, 0x7a4a21], [2, 0xc9a227]].forEach(([dx, c]) => cyl(g, mx + dx, y, a.z, 1.32, 0.65, c, { ax: 'x', nh: 1 }));
-    return { g, top: new T.Vector3(mx, y + 2, a.z) };
+    const g = new T.Group(), a = anchor(it.a), b = anchor(it.b), y = a.y + 3.2, dx = b.x - a.x, dz = b.z - a.z;
+    const ohms = it.ohms ?? 220, exp = Math.max(0, Math.floor(Math.log10(ohms)) - 1), mant = Math.round(ohms / 10 ** exp);
+    leg(g, a, 3.4); leg(g, b, 3.4); lead(g, a, b, y);
+    const body = new T.Group(); body.position.set((a.x + b.x) / 2, 0, (a.z + b.z) / 2); body.rotation.y = -Math.atan2(dz, dx); g.add(body);
+    cyl(body, 0, y, 0, 1.25, 6.4, 0xdcbd8e, { ax: 'x' });
+    [[-2.1, BAND[Math.floor(mant / 10) % 10]], [-1, BAND[mant % 10]], [0.1, BAND[Math.min(9, exp)]], [2, 0xc9a227]].forEach(([dxb, c]) => cyl(body, dxb, y, 0, 1.32, 0.65, c, { ax: 'x', nh: 1 }));
+    return { g, top: new T.Vector3((a.x + b.x) / 2, y + 2, (a.z + b.z) / 2) };
   }
   function mkButton(it: Of<'button'>): Made {
     const g = new T.Group(), p = anchor('e' + it.col), q = anchor('f' + (it.col + 2)), cx = (p.x + q.x) / 2, cz = (p.z + q.z) / 2, y = p.y;
@@ -278,12 +316,12 @@ export function buildWorld(spec: WorldSpec, anisotropy: number): World {
     return { g, set, top: new T.Vector3(p.x, y + 14.5, p.z) };
   }
   function mkBuzzer(it: Of<'buzzer'>): Made {
-    const g = new T.Group(), a = anchor(it.a), b = anchor(it.b), cx = (a.x + b.x) / 2, y = a.y;
+    const g = new T.Group(), a = anchor(it.a), b = anchor(it.b), cx = (a.x + b.x) / 2, cz = (a.z + b.z) / 2, y = a.y;
     let freq = 0;
-    leg(g, a, 0.8); leg(g, b, 0.8);
-    const body = cyl(g, cx, y + 0.7, a.z, 6, 8.6, 0x2b3038); cyl(g, cx, y + 9.3, a.z, 1.2, 0.08, 0x8d97a1, { nh: 1 });
-    anim.push(t => { const s = freq ? 1 + 0.04 * Math.sin(t / 16) : 1; body.scale.set(s, 1, s); body.userData.hull.scale.set(s, 1, s); });
-    return { g, set: f => { freq = f; }, top: new T.Vector3(cx, y + 11, a.z) };
+    leg(g, a, 0.8); leg(g, b, 0.8); lead(g, a.clone().setY(y + 0.8), b.clone().setY(y + 0.8), y + 0.8);
+    const body = cyl(g, cx, y + 0.7, cz, 6, 8.6, 0x2b3038); cyl(g, cx, y + 9.3, cz, 1.2, 0.08, 0x8d97a1, { nh: 1 });
+    itemAnim.push(t => { const s = freq ? 1 + 0.04 * Math.sin(t / 16) : 1; body.scale.set(s, 1, s); body.userData.hull.scale.set(s, 1, s); });
+    return { g, set: f => { freq = f; }, top: new T.Vector3(cx, y + 11, cz) };
   }
   function mkSonar(it: Of<'sonar'>): Made {
     const g = new T.Group(), p = anchor(it.row + it.col), cx = p.x + 3.81, z = p.z, y = p.y;
@@ -324,24 +362,69 @@ export function buildWorld(spec: WorldSpec, anisotropy: number): World {
     world.add(g);
   }
 
+  /* --- smoke and sparks --- */
+  const fx: { m: T.Mesh<T.SphereGeometry, T.MeshBasicMaterial>; v: T.Vector3; born: number; life: number }[] = [];
+  function puff(at: T.Vector3, kind: 'smoke' | 'spark') {
+    const now = performance.now(), n = kind === 'smoke' ? 9 : 14;
+    for (let i = 0; i < n; i++) {
+      const r = kind === 'smoke' ? 1.6 + Math.random() * 1.6 : 0.5 + Math.random() * 0.5;
+      const m = new T.Mesh(new T.SphereGeometry(r, 10, 8), new T.MeshBasicMaterial({ color: kind === 'smoke' ? (i % 2 ? 0x8d949b : 0x5b6168) : (i % 2 ? 0xffc23a : 0xff7a2a), transparent: true, opacity: 0.85, depthWrite: false }));
+      m.position.copy(at); m.raycast = () => {}; world.add(m);
+      const sp = kind === 'smoke' ? 0.006 : 0.03;
+      fx.push({ m, born: now, life: kind === 'smoke' ? 1700 : 650, v: new T.Vector3((Math.random() - 0.5) * sp * 2, (kind === 'smoke' ? 0.012 : 0.02) + Math.random() * sp, (Math.random() - 0.5) * sp * 2) });
+    }
+  }
+  function stepFx(t: number) {
+    for (let i = fx.length - 1; i >= 0; i--) {
+      const f = fx[i], p = (t - f.born) / f.life;
+      if (p >= 1) { world.remove(f.m); f.m.geometry.dispose(); f.m.material.dispose(); fx.splice(i, 1); continue; }
+      f.m.position.addScaledVector(f.v, 16); f.m.scale.setScalar(1 + p * 1.8); f.m.material.opacity = 0.85 * (1 - p);
+    }
+  }
+
   /* --- assembly --- */
   const addHot = (id: string, title: string, pos: T.Vector3) => hots.push({ id, title, pos });
-  const isUno = spec.board === 'uno', wired = spec.circuit.length > 0;
-  if (!isUno || wired) { bb = buildBB(); bb.position.set(isUno ? 50 : 0, 0, 0); world.add(bb); }
+  const isUno = spec.board === 'uno';
+  bb = buildBB(); bb.position.set(isUno ? 50 : 0, 0, 0); world.add(bb);
   const b = isUno ? (uno = buildUno()) : buildEsp();
-  if (isUno) { b.group.position.set(wired ? -50 : 0, 1.6, 0); shadow(world, b.group.position.x, 0, b.W, b.D); }
+  if (isUno) { b.group.position.set(-50, 1.6, 0); shadow(world, b.group.position.x, 0, b.W, b.D); }
   else b.group.position.set(colX(4) + b.W / 2 - 8.24, BBH + 4.1, 0);
   world.add(b.group); cable(b);
   Object.assign(groups, b.parts); devs.builtin = b.setLed;
   if (spec.parts) for (const id of Object.keys(spec.parts)) { const h = b.hot[id]; if (h) addHot(id, spec.parts[id][0], new T.Vector3(...h).add(b.group.position)); }
-  padPos = bb ? new T.Vector3(bb.position.x + colX(8), 0.8, 46) : null;
-  spec.circuit.forEach((it, k) => {
-    const made = make(it, k), id = itemId(it, k);
-    made.g.userData.pick = it.t === 'wire' ? null : id;
-    world.add(made.g); groups[id] = made.g;
-    if (made.set) devs[id] = made.set;
-    if (made.top && spec.info[it.t]) addHot(id, spec.info[it.t][0], made.top);
-  });
+  padPos = new T.Vector3(bb.position.x + colX(8), 0.8, 46);
+  const boardHots = hots.length;
+
+  /* --- the parts the student placed --- */
+  let placed: T.Group[] = [], placedIds: string[] = [], burntSet = new Set<string>();
+  const burners: Record<string, () => void> = {}, tops: Record<string, T.Vector3> = {};
+  const free = (o: T.Object3D) => o.traverse(c => { if (c instanceof T.Mesh) { c.geometry.dispose(); c.material.map?.dispose(); c.material.dispose(); } });
+  function setCircuit(items: Item[], burnt: string[]) {
+    placed.forEach(g => { world.remove(g); free(g); });
+    placedIds.forEach(id => { delete devs[id]; delete groups[id]; delete burners[id]; delete tops[id]; });
+    placed = []; placedIds = []; itemAnim.length = 0; hots.length = boardHots; burntSet = new Set(burnt); lit = [];
+    items.forEach((it, k) => {
+      let made: Made;
+      try { made = make(it, k); } catch { return; }   // a point that is not on this bench is skipped
+      const id = itemId(it, k);
+      made.g.userData.pick = id;
+      world.add(made.g); groups[id] = made.g; placed.push(made.g); placedIds.push(id);
+      if (made.set) devs[id] = made.set;
+      if (made.top) tops[id] = made.top;
+      if (made.burn) { burners[id] = made.burn; if (burntSet.has(id)) made.burn(); }
+      if (made.top && spec.info[it.t]) addHot(id, spec.info[it.t][0], made.top);
+    });
+  }
+  const safeAnchor = (name: string): T.Vector3 | null => { try { return anchor(name); } catch { return null; } };
+
+  /* --- rings that show where a part is about to go --- */
+  const ring = (color: number) => {
+    const m = new T.Mesh(new T.RingGeometry(1.5, 2.7, 24), new T.MeshBasicMaterial({ color, transparent: true, opacity: 0.95, depthTest: false, side: T.DoubleSide }));
+    m.rotation.x = -Math.PI / 2; m.renderOrder = 999; m.visible = false; m.raycast = () => {}; m.userData.nofit = true; world.add(m); return m;
+  };
+  const hoverRing = ring(0x14b8c4), pendRing = ring(0xe2572b);
+  const preview = new T.Line(new T.BufferGeometry().setFromPoints([new T.Vector3(), new T.Vector3()]), new T.LineBasicMaterial({ color: 0xe2572b, depthTest: false }));
+  preview.renderOrder = 998; preview.visible = false; preview.raycast = () => {}; preview.userData.nofit = true; world.add(preview);
 
   return {
     group: world, hots,
@@ -353,7 +436,21 @@ export function buildWorld(spec: WorldSpec, anisotropy: number): World {
       g.traverse(o => { const hm: T.MeshBasicMaterial | undefined = o.userData.hm; if (hm && !lit.includes(hm)) lit.push(hm); });
       lit.forEach(m => m.color.setHex(HILITE));
     },
-    animate(t) { anim.forEach(f => f(t)); },
+    animate(t) { itemAnim.forEach(f => f(t)); stepFx(t); },
+    setCircuit,
+    burn(id) {
+      if (burntSet.has(id)) return;
+      burntSet.add(id); burners[id]?.();
+      const at = tops[id]; if (at) puff(at.clone().setY(at.y - 4), 'smoke');
+    },
+    puff,
+    anchor: safeAnchor,
+    markers(hover, pending) {
+      const place = (r: T.Mesh, name: string | null) => { const p = name ? safeAnchor(name) : null; r.visible = !!p; if (p) r.position.set(p.x, p.y + 0.4, p.z); return p; };
+      const h = place(hoverRing, hover), q = place(pendRing, pending);
+      preview.visible = !!(h && q && hover !== pending);
+      if (preview.visible) preview.geometry.setFromPoints([q!.clone().setY(q!.y + 2), h!.clone().setY(h!.y + 2)]);
+    },
     dispose() {
       world.traverse(o => {
         if (!(o instanceof T.Mesh)) return;

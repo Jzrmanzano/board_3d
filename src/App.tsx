@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { CodePanel } from './components/CodePanel';
+import { Home } from './components/Home';
 import { DocPanel } from './components/DocPanel';
 import { Stage } from './components/Stage';
 import { BOARDS } from './data/boards';
@@ -13,7 +14,8 @@ function TopBar() {
   const board = useLab(boardOf), done = useLab(s => s.done.length);
   return (
     <header className="bar">
-      <div className="brand"><h1>Board Lab <span>3D</span></h1><p>Wire it, code it, run it.</p></div>
+      <a className="brand" href="#" title="Back to the home page"><h1>Board Lab <span>3D</span></h1><p>Wire it, code it, run it.</p></a>
+      <a className="home-link" href="#">← Home</a>
       <div className="seg" role="tablist" aria-label="Choose a board">
         {ALL_BOARDS.map(b => (
           <button key={b.id} type="button" role="tab" aria-selected={b.id === board.id} onClick={() => goTo(b.id, b.lessons[0].id)}>{b.name}</button>
@@ -46,8 +48,9 @@ function LessonRail() {
 }
 
 export function App() {
-  const board = useLab(boardOf), lesson = useLab(lessonOf);
-  useEffect(() => { document.title = `${lesson.title} · ${board.name} · Board Lab`; }, [board, lesson]);
+  const board = useLab(boardOf), lesson = useLab(lessonOf), home = useLab(s => s.home);
+  useEffect(() => { document.title = home ? 'Board Lab 3D · Learn Arduino and ESP32' : `${lesson.title} · ${board.name} · Board Lab`; }, [home, board, lesson]);
+  if (home) return <Home />;
   return (
     <div className="app">
       <TopBar />

@@ -1,6 +1,6 @@
 import { WIRE_CSS, wiringRows } from '../data/wiring';
-import { setTab } from '../state/actions';
-import { boardOf, lessonOf, useLab, type Tab } from '../state/store';
+import { setTab, showAnswer } from '../state/actions';
+import { benchOf, boardOf, lessonOf, useLab, type Tab } from '../state/store';
 import type { Board, Lesson } from '../types';
 
 const TABS: [Tab, string][] = [['guide', 'Guide'], ['wiring', 'Wiring'], ['pinout', 'Board']];
@@ -22,11 +22,13 @@ function Guide({ lesson }: { lesson: Lesson }) {
 }
 
 function Wiring({ lesson }: { lesson: Lesson }) {
+  const placed = useLab(s => benchOf(s).length);
   if (!lesson.circuit.length) return <><h2>Wiring</h2><p>This lesson uses only the board itself. Nothing to wire yet.</p></>;
   return (
     <>
       <h2>Wiring</h2>
-      <p>Each part and wire, with the holes it uses. Columns are numbered 1 to 30 and rows are lettered a to j.</p>
+      <p>Build this circuit yourself: pick parts from the tray above the 3D view and click the holes below. Columns are numbered 1 to 30 and rows are lettered a to j.</p>
+      <p><button type="button" className="answer" onClick={showAnswer}>Stuck? Build it for me</button> <small>{placed} of {lesson.circuit.length} placed on your bench</small></p>
       <div className="scrollx">
         <table className="wiring">
           <tbody>
